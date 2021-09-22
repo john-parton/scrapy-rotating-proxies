@@ -1,2 +1,4 @@
-# -*- coding: utf-8 -*-
-__version__ = "0.6.2"
+try:
+    from .version import version as __version__
+except ImportError:
+    pass

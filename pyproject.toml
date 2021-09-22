@@ -3,7 +3,9 @@ name = "scrapy-rotating-proxies"
 
 [build-system]
 requires = [
-  "attrs > 16.0.0"
+  "setuptools",
+  "wheel",
+  "setuptools_scm[toml]>=6.0"
 ]
 build-backend = "setuptools.build_meta"
 

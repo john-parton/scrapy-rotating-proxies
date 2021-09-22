@@ -13,3 +13,5 @@ htmlcov
 docs/_build
 .hypothesis
 .html
+rotating_proxies/version.py
+.python-version
