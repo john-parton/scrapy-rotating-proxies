@@ -1,11 +1,11 @@
-from __future__ import absolute_import
-try:
-    from urllib2 import _parse_proxy
-except ImportError:
-    from urllib.request import _parse_proxy
+import re
+from urllib.parse import urlparse
 
 
-def extract_proxy_hostport(proxy):
+HAS_PROTOCOL_PATTERN = re.compile('^.+://')
+
+
+def extract_proxy_hostport(proxy) -> str:
     """
     Return the hostport component from a given proxy:
 
@@ -24,4 +24,14 @@ def extract_proxy_hostport(proxy):
     >>> extract_proxy_hostport('http://foo:bar@baz:1234')
     'baz:1234'
     """
-    return _parse_proxy(proxy)[3]
+    if not HAS_PROTOCOL_PATTERN.search(proxy):
+        proxy = f'//{proxy}'
+
+    parsed = urlparse(proxy)
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return parsed.hostname
+    else:
+        return f'{parsed.hostname}:{parsed.port}'

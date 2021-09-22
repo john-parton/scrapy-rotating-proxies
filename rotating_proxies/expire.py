@@ -12,7 +12,7 @@ from .utils import extract_proxy_hostport
 logger = logging.getLogger(__name__)
 
 
-class Proxies(object):
+class Proxies:
     """
     Expiring proxies container.
 
@@ -88,11 +88,11 @@ class Proxies(object):
     def mark_good(self, proxy):
         """ Mark a proxy as good """
         if proxy not in self.proxies:
-            logger.warn("Proxy <%s> was not found in proxies list" % proxy)
+            logger.warn(f"Proxy <{proxy}> was not found in proxies list")
             return
 
         if proxy not in self.good:
-            logger.debug("Proxy <%s> is GOOD" % proxy)
+            logger.debug(f"Proxy <{proxy}> is GOOD")
 
         self.unchecked.discard(proxy)
         self.dead.discard(proxy)
@@ -131,22 +131,28 @@ class Proxies(object):
 
     def __str__(self):
         n_reanimated = len(self.reanimated)
-        return "Proxies(good: {}, dead: {}, unchecked: {}, reanimated: {}, " \
-               "mean backoff time: {}s)".format(
-            len(self.good), len(self.dead),
-            len(self.unchecked) - n_reanimated, n_reanimated,
-            int(self.mean_backoff_time),
+
+        return (
+            "Proxies("
+            f"good: {len(self.good)}, "
+            f"dead: {len(self.dead)}, "
+            f"unchecked: {len(self.unchecked) - n_reanimated}, "
+            f"reanimated: {n_reanimated}, "
+            f"mean backoff time: {int(self.mean_backoff_time)}s"
+            ")"
         )
 
 
 @attr.s
-class ProxyState(object):
-    failed_attempts = attr.ib(default=0)
-    next_check = attr.ib(default=None)
-    backoff_time = attr.ib(default=None)  # for debugging
+class ProxyState:
+    slot_key: str = attr.ib()
+    failed_attempts: int = attr.ib(default=0)
+    next_check: typing.Optional[time.time] = attr.ib(default=None)
+    backoff_time: typing.Optiona[float] = attr.ib(default=None)  # for debugging
 
 
-def exp_backoff(attempt, cap=3600, base=300):
+
+def exp_backoff(attempt, cap=3_600, base=300) -> float:
     """ Exponential backoff time """
     # this is a numerically stable version of
     # min(cap, base * 2 ** attempt)
@@ -156,6 +162,6 @@ def exp_backoff(attempt, cap=3600, base=300):
     return cap
 
 
-def exp_backoff_full_jitter(*args, **kwargs):
+def exp_backoff_full_jitter(*args, **kwargs) -> float:
     """ Exponential backoff time with Full Jitter """
     return random.uniform(0, exp_backoff(*args, **kwargs))

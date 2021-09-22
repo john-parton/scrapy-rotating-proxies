@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
 import logging
-import codecs
 from functools import partial
-from six.moves.urllib.parse import urlsplit
 
 from scrapy.exceptions import CloseSpider, NotConfigured
 from scrapy import signals
@@ -17,7 +14,7 @@ from .expire import Proxies, exp_backoff_full_jitter
 logger = logging.getLogger(__name__)
 
 
-class RotatingProxyMiddleware(object):
+class RotatingProxyMiddleware:
     """
     Scrapy downloader middleware which choses a random proxy for each request.
 
@@ -39,7 +36,7 @@ class RotatingProxyMiddleware(object):
     Dead proxies are re-checked with a randomized exponential backoff.
 
     By default, all default Scrapy concurrency options (DOWNLOAD_DELAY,
-    AUTHTHROTTLE_..., CONCURRENT_REQUESTS_PER_DOMAIN, etc) become per-proxy
+    AUTOTHROTTLE_..., CONCURRENT_REQUESTS_PER_DOMAIN, etc) become per-proxy
     for proxied requests when RotatingProxyMiddleware is enabled.
     For example, if you set CONCURRENT_REQUESTS_PER_DOMAIN=2 then
     spider will be making at most 2 concurrent connections to each proxy.
@@ -73,7 +70,7 @@ class RotatingProxyMiddleware(object):
         self.reanimate_interval = 5
         self.stop_if_no_proxies = stop_if_no_proxies
         self.max_proxies_to_try = max_proxies_to_try
-        self.stats = crawler.stats
+        self.crawler = crawler
 
         self.log_task = None
         self.reanimate_task = None
@@ -83,7 +80,7 @@ class RotatingProxyMiddleware(object):
         s = crawler.settings
         proxy_path = s.get('ROTATING_PROXY_LIST_PATH', None)
         if proxy_path is not None:
-            with codecs.open(proxy_path, 'r', encoding='utf8') as f:
+            with open(proxy_path, 'rt', encoding='utf8') as f:
                 proxy_list = [line.strip() for line in f if line.strip()]
         else:
             proxy_list = s.getlist('ROTATING_PROXY_LIST')
@@ -143,6 +140,7 @@ class RotatingProxyMiddleware(object):
                     raise CloseSpider("no_proxies_after_reset")
 
         request.meta['proxy'] = proxy
+        # Annoying that we're constantly parsing this URL, why can't we do that once in setup?
         request.meta['download_slot'] = self.get_proxy_slot(proxy)
         request.meta['_rotating_proxy'] = True
 
@@ -150,10 +148,16 @@ class RotatingProxyMiddleware(object):
         """
         Return downloader slot for a proxy.
         By default it doesn't take port in account, i.e. all proxies with
-        the same hostname / ip address share the same slot.
+        the same hostname / ip address share the same slot, unless
+        the hostname is "localhost" in which case it does
         """
         # FIXME: an option to use website address as a part of slot as well?
-        return urlsplit(proxy).hostname
+        parsed = urlparse(proxy)
+
+        if parsed.hostname == 'localhost':
+            return f'{parsed.hostname}:{parsed.port}'
+        else:
+            return parsed.hostname
 
     def process_exception(self, request, exception, spider):
         return self._handle_result(request, spider)
@@ -163,19 +167,22 @@ class RotatingProxyMiddleware(object):
 
     def _handle_result(self, request, spider):
         proxy = self.proxies.get_proxy(request.meta.get('proxy', None))
-        if not (proxy and request.meta.get('_rotating_proxy')):
+
+        if not proxy or not request.meta.get('_rotating_proxy'):
             return
-        self.stats.set_value('proxies/unchecked', len(self.proxies.unchecked) - len(self.proxies.reanimated))
-        self.stats.set_value('proxies/reanimated', len(self.proxies.reanimated))
-        self.stats.set_value('proxies/mean_backoff', self.proxies.mean_backoff_time)
+
+        self.crawler.stats.set_value('proxies/unchecked', len(self.proxies.unchecked) - len(self.proxies.reanimated))
+        self.crawler.stats.set_value('proxies/reanimated', len(self.proxies.reanimated))
+        self.crawler.stats.set_value('proxies/mean_backoff', self.proxies.mean_backoff_time)
         ban = request.meta.get('_ban', None)
+
         if ban is True:
             self.proxies.mark_dead(proxy)
-            self.stats.set_value('proxies/dead', len(self.proxies.dead))
+            self.crawler.stats.set_value('proxies/dead', len(self.proxies.dead))
             return self._retry(request, spider)
         elif ban is False:
             self.proxies.mark_good(proxy)
-            self.stats.set_value('proxies/good', len(self.proxies.good))
+            self.crawler.stats.set_value('proxies/good', len(self.proxies.good))
 
     def _retry(self, request, spider):
         retries = request.meta.get('proxy_retry_times', 0) + 1
@@ -200,19 +207,23 @@ class RotatingProxyMiddleware(object):
                          extra={'spider': spider})
 
     def log_stats(self):
-        logger.info('%s' % self.proxies)
+        logger.info(str(self.proxies))
 
     @classmethod
     def cleanup_proxy_list(cls, proxy_list):
-        lines = [line.strip() for line in proxy_list]
-        return list({
-            add_http_if_no_scheme(url)
-            for url in lines
-            if url and not url.startswith('#')
-        })
+        proxy_list = map(str.rstrip, proxy_list)
+        proxy_list = map(add_http_if_no_scheme, proxy_list)
+
+        # Remove dupes
+        proxy_list = set(proxy_list)
+
+        # Buit we want it to be a list for some reason
+        proxy_list = list(proxy_list)
+
+        return proxy_list
 
 
-class BanDetectionMiddleware(object):
+class BanDetectionMiddleware:
     """
     Downloader middleware for detecting bans. It adds
     '_ban': True to request.meta if the response was a ban.
@@ -291,8 +302,8 @@ class BanDetectionMiddleware(object):
         ban = is_ban(request, response)
         request.meta['_ban'] = ban
         if ban:
-            self.stats.inc_value("bans/status/%s" % response.status)
-            if not len(response.body):
+            self.stats.inc_value(f"bans/status/{response.status}")
+            if not response.body:
                 self.stats.inc_value("bans/empty")
         return response
 
@@ -300,8 +311,8 @@ class BanDetectionMiddleware(object):
         is_ban = getattr(spider, 'exception_is_ban',
                          self.policy.exception_is_ban)
         ban = is_ban(request, exception)
+
         if ban:
-            ex_class = "%s.%s" % (exception.__class__.__module__,
-                                  exception.__class__.__name__)
-            self.stats.inc_value("bans/error/%s" % ex_class)
+            exception_class = exception.__class__
+            self.stats.inc_value(f"bans/error/{exception_class.__module__}.{exception_class.__name__}")
         request.meta['_ban'] = ban
