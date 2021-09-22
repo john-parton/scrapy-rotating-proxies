@@ -67,13 +67,13 @@ class Proxies:
     def mark_dead(self, proxy, _time=None):
         """Mark a proxy as dead"""
         if proxy not in self.proxies:
-            logger.warn("Proxy <%s> was not found in proxies list" % proxy)
+            logger.warn(f"Proxy <{proxy}> was not found in proxies list")
             return
 
         if proxy in self.good:
-            logger.debug("GOOD proxy became DEAD: <%s>" % proxy)
+            logger.debug(f"GOOD proxy became DEAD: <{proxy}>")
         else:
-            logger.debug("Proxy <%s> is DEAD" % proxy)
+            logger.debug(f"Proxy <{proxy}> is DEAD")
 
         self.unchecked.discard(proxy)
         self.good.discard(proxy)
