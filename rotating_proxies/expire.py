@@ -32,11 +32,11 @@ class Proxies:
     'reanimated'). This timeout increases exponentially after each
     unsuccessful attempt to use a proxy.
     """
+
     def __init__(self, proxy_list, backoff=None):
         self.proxies = {url: ProxyState() for url in proxy_list}
         self.proxies_by_hostport = {
-            extract_proxy_hostport(proxy): proxy
-            for proxy in self.proxies
+            extract_proxy_hostport(proxy): proxy for proxy in self.proxies
         }
         self.unchecked = set(self.proxies.keys())
         self.good = set()
@@ -47,7 +47,7 @@ class Proxies:
         self.backoff = backoff
 
     def get_random(self):
-        """ Return a random available proxy (either good or unchecked) """
+        """Return a random available proxy (either good or unchecked)"""
         available = list(self.unchecked | self.good)
         if not available:
             return None
@@ -65,7 +65,7 @@ class Proxies:
         return self.proxies_by_hostport.get(hostport, None)
 
     def mark_dead(self, proxy, _time=None):
-        """ Mark a proxy as dead """
+        """Mark a proxy as dead"""
         if proxy not in self.proxies:
             logger.warn("Proxy <%s> was not found in proxies list" % proxy)
             return
@@ -86,7 +86,7 @@ class Proxies:
         state.failed_attempts += 1
 
     def mark_good(self, proxy):
-        """ Mark a proxy as good """
+        """Mark a proxy as good"""
         if proxy not in self.proxies:
             logger.warn(f"Proxy <{proxy}> was not found in proxies list")
             return
@@ -100,7 +100,7 @@ class Proxies:
         self.proxies[proxy].failed_attempts = 0
 
     def reanimate(self, _time=None):
-        """ Move dead proxies to unchecked if a backoff timeout passes """
+        """Move dead proxies to unchecked if a backoff timeout passes"""
         n_reanimated = 0
         now = _time or time.time()
         for proxy in list(self.dead):
@@ -113,7 +113,7 @@ class Proxies:
         return n_reanimated
 
     def reset(self):
-        """ Mark all dead proxies as unchecked """
+        """Mark all dead proxies as unchecked"""
         for proxy in list(self.dead):
             self.dead.remove(proxy)
             self.unchecked.add(proxy)
@@ -151,9 +151,8 @@ class ProxyState:
     backoff_time: typing.Optiona[float] = attr.ib(default=None)  # for debugging
 
 
-
 def exp_backoff(attempt, cap=3_600, base=300) -> float:
-    """ Exponential backoff time """
+    """Exponential backoff time"""
     # this is a numerically stable version of
     # min(cap, base * 2 ** attempt)
     max_attempts = math.log(cap / base, 2)
@@ -163,5 +162,5 @@ def exp_backoff(attempt, cap=3_600, base=300) -> float:
 
 
 def exp_backoff_full_jitter(*args, **kwargs) -> float:
-    """ Exponential backoff time with Full Jitter """
+    """Exponential backoff time with Full Jitter"""
     return random.uniform(0, exp_backoff(*args, **kwargs))

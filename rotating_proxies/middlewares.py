@@ -60,12 +60,20 @@ class RotatingProxyMiddleware:
     * ``ROTATING_PROXY_BACKOFF_CAP`` - backoff time cap, in seconds.
       Default is 3600 (i.e. 60 min).
     """
-    def __init__(self, proxy_list, logstats_interval, stop_if_no_proxies,
-                 max_proxies_to_try, backoff_base, backoff_cap, crawler):
+
+    def __init__(
+        self,
+        proxy_list,
+        logstats_interval,
+        stop_if_no_proxies,
+        max_proxies_to_try,
+        backoff_base,
+        backoff_cap,
+        crawler,
+    ):
 
         backoff = partial(exp_backoff_full_jitter, base=backoff_base, cap=backoff_cap)
-        self.proxies = Proxies(self.cleanup_proxy_list(proxy_list),
-                               backoff=backoff)
+        self.proxies = Proxies(self.cleanup_proxy_list(proxy_list), backoff=backoff)
         self.logstats_interval = logstats_interval
         self.reanimate_interval = 5
         self.stop_if_no_proxies = stop_if_no_proxies
@@ -78,27 +86,25 @@ class RotatingProxyMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
         s = crawler.settings
-        proxy_path = s.get('ROTATING_PROXY_LIST_PATH', None)
+        proxy_path = s.get("ROTATING_PROXY_LIST_PATH", None)
         if proxy_path is not None:
-            with open(proxy_path, 'rt', encoding='utf8') as f:
+            with open(proxy_path, "rt", encoding="utf8") as f:
                 proxy_list = [line.strip() for line in f if line.strip()]
         else:
-            proxy_list = s.getlist('ROTATING_PROXY_LIST')
+            proxy_list = s.getlist("ROTATING_PROXY_LIST")
         if not proxy_list:
             raise NotConfigured()
         mw = cls(
             proxy_list=proxy_list,
-            logstats_interval=s.getfloat('ROTATING_PROXY_LOGSTATS_INTERVAL', 30),
-            stop_if_no_proxies=s.getbool('ROTATING_PROXY_CLOSE_SPIDER', False),
-            max_proxies_to_try=s.getint('ROTATING_PROXY_PAGE_RETRY_TIMES', 5),
-            backoff_base=s.getfloat('ROTATING_PROXY_BACKOFF_BASE', 300),
-            backoff_cap=s.getfloat('ROTATING_PROXY_BACKOFF_CAP', 3600),
+            logstats_interval=s.getfloat("ROTATING_PROXY_LOGSTATS_INTERVAL", 30),
+            stop_if_no_proxies=s.getbool("ROTATING_PROXY_CLOSE_SPIDER", False),
+            max_proxies_to_try=s.getint("ROTATING_PROXY_PAGE_RETRY_TIMES", 5),
+            backoff_base=s.getfloat("ROTATING_PROXY_BACKOFF_BASE", 300),
+            backoff_cap=s.getfloat("ROTATING_PROXY_BACKOFF_CAP", 3600),
             crawler=crawler,
         )
-        crawler.signals.connect(mw.engine_started,
-                                signal=signals.engine_started)
-        crawler.signals.connect(mw.engine_stopped,
-                                signal=signals.engine_stopped)
+        crawler.signals.connect(mw.engine_started, signal=signals.engine_started)
+        crawler.signals.connect(mw.engine_stopped, signal=signals.engine_stopped)
         return mw
 
     def engine_started(self):
@@ -113,8 +119,7 @@ class RotatingProxyMiddleware:
     def reanimate_proxies(self):
         n_reanimated = self.proxies.reanimate()
         if n_reanimated:
-            logger.debug("%s proxies moved from 'dead' to 'reanimated'",
-                         n_reanimated)
+            logger.debug("%s proxies moved from 'dead' to 'reanimated'", n_reanimated)
 
     def engine_stopped(self):
         if self.log_task and self.log_task.running:
@@ -124,25 +129,24 @@ class RotatingProxyMiddleware:
             self.reanimate_task.stop()
 
     def process_request(self, request, spider):
-        if 'proxy' in request.meta and not request.meta.get('_rotating_proxy'):
+        if "proxy" in request.meta and not request.meta.get("_rotating_proxy"):
             return
         proxy = self.proxies.get_random()
         if not proxy:
             if self.stop_if_no_proxies:
                 raise CloseSpider("no_proxies")
             else:
-                logger.warn("No proxies available; marking all proxies "
-                            "as unchecked")
+                logger.warn("No proxies available; marking all proxies " "as unchecked")
                 self.proxies.reset()
                 proxy = self.proxies.get_random()
                 if proxy is None:
                     logger.error("No proxies available even after a reset.")
                     raise CloseSpider("no_proxies_after_reset")
 
-        request.meta['proxy'] = proxy
+        request.meta["proxy"] = proxy
         # Annoying that we're constantly parsing this URL, why can't we do that once in setup?
-        request.meta['download_slot'] = self.get_proxy_slot(proxy)
-        request.meta['_rotating_proxy'] = True
+        request.meta["download_slot"] = self.get_proxy_slot(proxy)
+        request.meta["_rotating_proxy"] = True
 
     def get_proxy_slot(self, proxy):
         """
@@ -154,8 +158,8 @@ class RotatingProxyMiddleware:
         # FIXME: an option to use website address as a part of slot as well?
         parsed = urlparse(proxy)
 
-        if parsed.hostname == 'localhost':
-            return f'{parsed.hostname}:{parsed.port}'
+        if parsed.hostname == "localhost":
+            return f"{parsed.hostname}:{parsed.port}"
         else:
             return parsed.hostname
 
@@ -166,45 +170,58 @@ class RotatingProxyMiddleware:
         return self._handle_result(request, spider) or response
 
     def _handle_result(self, request, spider):
-        proxy = self.proxies.get_proxy(request.meta.get('proxy', None))
+        proxy = self.proxies.get_proxy(request.meta.get("proxy", None))
 
-        if not proxy or not request.meta.get('_rotating_proxy'):
+        if not proxy or not request.meta.get("_rotating_proxy"):
             return
 
-        self.crawler.stats.set_value('proxies/unchecked', len(self.proxies.unchecked) - len(self.proxies.reanimated))
-        self.crawler.stats.set_value('proxies/reanimated', len(self.proxies.reanimated))
-        self.crawler.stats.set_value('proxies/mean_backoff', self.proxies.mean_backoff_time)
-        ban = request.meta.get('_ban', None)
+        self.crawler.stats.set_value(
+            "proxies/unchecked",
+            len(self.proxies.unchecked) - len(self.proxies.reanimated),
+        )
+        self.crawler.stats.set_value("proxies/reanimated", len(self.proxies.reanimated))
+        self.crawler.stats.set_value(
+            "proxies/mean_backoff", self.proxies.mean_backoff_time
+        )
+        ban = request.meta.get("_ban", None)
 
         if ban is True:
             self.proxies.mark_dead(proxy)
-            self.crawler.stats.set_value('proxies/dead', len(self.proxies.dead))
+            self.crawler.stats.set_value("proxies/dead", len(self.proxies.dead))
             return self._retry(request, spider)
         elif ban is False:
             self.proxies.mark_good(proxy)
-            self.crawler.stats.set_value('proxies/good', len(self.proxies.good))
+            self.crawler.stats.set_value("proxies/good", len(self.proxies.good))
 
     def _retry(self, request, spider):
-        retries = request.meta.get('proxy_retry_times', 0) + 1
-        max_proxies_to_try = request.meta.get('max_proxies_to_try',
-                                              self.max_proxies_to_try)
+        retries = request.meta.get("proxy_retry_times", 0) + 1
+        max_proxies_to_try = request.meta.get(
+            "max_proxies_to_try", self.max_proxies_to_try
+        )
 
         if retries <= max_proxies_to_try:
-            logger.debug("Retrying %(request)s with another proxy "
-                         "(failed %(retries)d times, "
-                         "max retries: %(max_proxies_to_try)d)",
-                         {'request': request, 'retries': retries,
-                          'max_proxies_to_try': max_proxies_to_try},
-                         extra={'spider': spider})
+            logger.debug(
+                "Retrying %(request)s with another proxy "
+                "(failed %(retries)d times, "
+                "max retries: %(max_proxies_to_try)d)",
+                {
+                    "request": request,
+                    "retries": retries,
+                    "max_proxies_to_try": max_proxies_to_try,
+                },
+                extra={"spider": spider},
+            )
             retryreq = request.copy()
-            retryreq.meta['proxy_retry_times'] = retries
+            retryreq.meta["proxy_retry_times"] = retries
             retryreq.dont_filter = True
             return retryreq
         else:
-            logger.debug("Gave up retrying %(request)s (failed %(retries)d "
-                         "times with different proxies)",
-                         {'request': request, 'retries': retries},
-                         extra={'spider': spider})
+            logger.debug(
+                "Gave up retrying %(request)s (failed %(retries)d "
+                "times with different proxies)",
+                {"request": request, "retries": retries},
+                extra={"spider": spider},
+            )
 
     def log_stats(self):
         logger.info(str(self.proxies))
@@ -276,6 +293,7 @@ class BanDetectionMiddleware:
                 return None
 
     """
+
     def __init__(self, stats, policy):
         self.stats = stats
         self.policy = policy
@@ -287,20 +305,18 @@ class BanDetectionMiddleware:
     @classmethod
     def _load_policy(cls, crawler):
         policy_path = crawler.settings.get(
-            'ROTATING_PROXY_BAN_POLICY',
-            'rotating_proxies.policy.BanDetectionPolicy'
+            "ROTATING_PROXY_BAN_POLICY", "rotating_proxies.policy.BanDetectionPolicy"
         )
         policy_cls = load_object(policy_path)
-        if hasattr(policy_cls, 'from_crawler'):
+        if hasattr(policy_cls, "from_crawler"):
             return policy_cls.from_crawler(crawler)
         else:
             return policy_cls()
 
     def process_response(self, request, response, spider):
-        is_ban = getattr(spider, 'response_is_ban',
-                         self.policy.response_is_ban)
+        is_ban = getattr(spider, "response_is_ban", self.policy.response_is_ban)
         ban = is_ban(request, response)
-        request.meta['_ban'] = ban
+        request.meta["_ban"] = ban
         if ban:
             self.stats.inc_value(f"bans/status/{response.status}")
             if not response.body:
@@ -308,11 +324,12 @@ class BanDetectionMiddleware:
         return response
 
     def process_exception(self, request, exception, spider):
-        is_ban = getattr(spider, 'exception_is_ban',
-                         self.policy.exception_is_ban)
+        is_ban = getattr(spider, "exception_is_ban", self.policy.exception_is_ban)
         ban = is_ban(request, exception)
 
         if ban:
             exception_class = exception.__class__
-            self.stats.inc_value(f"bans/error/{exception_class.__module__}.{exception_class.__name__}")
-        request.meta['_ban'] = ban
+            self.stats.inc_value(
+                f"bans/error/{exception_class.__module__}.{exception_class.__name__}"
+            )
+        request.meta["_ban"] = ban

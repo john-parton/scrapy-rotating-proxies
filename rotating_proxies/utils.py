@@ -2,7 +2,7 @@ import re
 from urllib.parse import urlparse
 
 
-HAS_PROTOCOL_PATTERN = re.compile('^.+://')
+HAS_PROTOCOL_PATTERN = re.compile("^.+://")
 
 
 def extract_proxy_hostport(proxy) -> str:
@@ -25,7 +25,7 @@ def extract_proxy_hostport(proxy) -> str:
     'baz:1234'
     """
     if not HAS_PROTOCOL_PATTERN.search(proxy):
-        proxy = f'//{proxy}'
+        proxy = f"//{proxy}"
 
     parsed = urlparse(proxy)
 
@@ -34,4 +34,4 @@ def extract_proxy_hostport(proxy) -> str:
     except ValueError:
         return parsed.hostname
     else:
-        return f'{parsed.hostname}:{parsed.port}'
+        return f"{parsed.hostname}:{parsed.port}"
