@@ -5,10 +5,9 @@ from functools import partial
 from scrapy.exceptions import CloseSpider, NotConfigured
 from scrapy import signals
 from scrapy.utils.misc import load_object
-from scrapy.utils.url import add_http_if_no_scheme
 from twisted.internet import task
 
-from .expire import Proxies, exp_backoff_full_jitter
+from .expire import ProxyManager, ProxyStatus
 
 
 logger = logging.getLogger(__name__)
@@ -61,51 +60,40 @@ class RotatingProxyMiddleware:
       Default is 3600 (i.e. 60 min).
     """
 
-    def __init__(
-        self,
-        proxy_list,
-        logstats_interval,
-        stop_if_no_proxies,
-        max_proxies_to_try,
-        backoff_base,
-        backoff_cap,
-        crawler,
-    ):
+    # Because the retry is processed by this middleware and not the
+    # retry middleware, we need to manually adjust the priority
+    priority_adjust = -1
 
-        backoff = partial(exp_backoff_full_jitter, base=backoff_base, cap=backoff_cap)
-        self.proxies = Proxies(self.cleanup_proxy_list(proxy_list), backoff=backoff)
-        self.logstats_interval = logstats_interval
-        self.reanimate_interval = 5
-        self.stop_if_no_proxies = stop_if_no_proxies
-        self.max_proxies_to_try = max_proxies_to_try
+    def __init__(self, crawler):
+        s = crawler.settings
+        proxy_path = s.get("ROTATING_PROXY_LIST_PATH", None)
+
+        if proxy_path is not None:
+            with open(proxy_path, "rt", encoding="utf8") as f:
+                proxy_list = map(str.strip, f)
+                proxy_list = filter(None, proxy_list)
+                proxy_list = list(proxy_list)
+        else:
+            proxy_list = s.getlist("ROTATING_PROXY_LIST")
+
+        if not proxy_list:
+            raise NotConfigured()
+
+        self.proxies = ProxyManager(proxy_list)
+        self.logstats_interval = s.getfloat("ROTATING_PROXY_LOGSTATS_INTERVAL", 30)
+        self.reanimate_interval = 5  # Hard-coded
+        self.stop_if_no_proxies = s.getbool("ROTATING_PROXY_CLOSE_SPIDER", False)
+        self.max_proxy_retries = s.getint("ROTATING_PROXY_PAGE_RETRY_TIMES", 5)
         self.crawler = crawler
-
         self.log_task = None
         self.reanimate_task = None
 
+        crawler.signals.connect(self.engine_started, signal=signals.engine_started)
+        crawler.signals.connect(self.engine_stopped, signal=signals.engine_stopped)
+
     @classmethod
     def from_crawler(cls, crawler):
-        s = crawler.settings
-        proxy_path = s.get("ROTATING_PROXY_LIST_PATH", None)
-        if proxy_path is not None:
-            with open(proxy_path, "rt", encoding="utf8") as f:
-                proxy_list = [line.strip() for line in f if line.strip()]
-        else:
-            proxy_list = s.getlist("ROTATING_PROXY_LIST")
-        if not proxy_list:
-            raise NotConfigured()
-        mw = cls(
-            proxy_list=proxy_list,
-            logstats_interval=s.getfloat("ROTATING_PROXY_LOGSTATS_INTERVAL", 30),
-            stop_if_no_proxies=s.getbool("ROTATING_PROXY_CLOSE_SPIDER", False),
-            max_proxies_to_try=s.getint("ROTATING_PROXY_PAGE_RETRY_TIMES", 5),
-            backoff_base=s.getfloat("ROTATING_PROXY_BACKOFF_BASE", 300),
-            backoff_cap=s.getfloat("ROTATING_PROXY_BACKOFF_CAP", 3600),
-            crawler=crawler,
-        )
-        crawler.signals.connect(mw.engine_started, signal=signals.engine_started)
-        crawler.signals.connect(mw.engine_stopped, signal=signals.engine_stopped)
-        return mw
+        return cls(crawler)
 
     def engine_started(self):
         if self.logstats_interval:
@@ -114,12 +102,8 @@ class RotatingProxyMiddleware:
 
         if self.reanimate_interval:
             self.reanimate_task = task.LoopingCall(self.reanimate_proxies)
+            # Also sets weights for randomc choice
             self.reanimate_task.start(self.reanimate_interval, now=False)
-
-    def reanimate_proxies(self):
-        n_reanimated = self.proxies.reanimate()
-        if n_reanimated:
-            logger.debug("%s proxies moved from 'dead' to 'reanimated'", n_reanimated)
 
     def engine_stopped(self):
         if self.log_task and self.log_task.running:
@@ -128,10 +112,21 @@ class RotatingProxyMiddleware:
         if self.reanimate_task and self.reanimate_task.running:
             self.reanimate_task.stop()
 
+    def reanimate_proxies(self):
+        n_reanimated = self.proxies.reanimate(
+            slots=self.crawler.engine.downloader.slots
+        )
+
+        if n_reanimated:
+            logger.debug("%s proxies moved from 'dead' to 'reanimated'", n_reanimated)
+
     def process_request(self, request, spider):
+        # Proxy was manually specified
         if "proxy" in request.meta and not request.meta.get("_rotating_proxy"):
             return
+
         proxy = self.proxies.get_random()
+
         if not proxy:
             if self.stop_if_no_proxies:
                 raise CloseSpider("no_proxies")
@@ -143,63 +138,84 @@ class RotatingProxyMiddleware:
                     logger.error("No proxies available even after a reset.")
                     raise CloseSpider("no_proxies_after_reset")
 
-        request.meta["proxy"] = proxy
-        # Annoying that we're constantly parsing this URL, why can't we do that once in setup?
-        request.meta["download_slot"] = self.get_proxy_slot(proxy)
-        request.meta["_rotating_proxy"] = True
-
-    def get_proxy_slot(self, proxy):
-        """
-        Return downloader slot for a proxy.
-        By default it doesn't take port in account, i.e. all proxies with
-        the same hostname / ip address share the same slot, unless
-        the hostname is "localhost" in which case it does
-        """
-        # FIXME: an option to use website address as a part of slot as well?
-        parsed = urlparse(proxy)
-
-        if parsed.hostname == "localhost":
-            return f"{parsed.hostname}:{parsed.port}"
-        else:
-            return parsed.hostname
+        request.meta["proxy"] = proxy.url
+        request.meta["download_slot"] = proxy.slot_key
+        # Flag which indicates proxy was randomly assigned
+        request.meta["_rotating_proxy"] = proxy
 
     def process_exception(self, request, exception, spider):
-        return self._handle_result(request, spider)
+
+        proxy = request.meta.get("_rotating_proxy", None)
+
+        if proxy is not None:
+
+            ban = spider.exception_is_ban(request, exception)
+
+            if ban:
+                exception_class = exception.__class__
+                self.stats.inc_value(
+                    f"bans/error/{exception_class.__module__}.{exception_class.__name__}"
+                )
+
+                return self._handle_ban(request, proxy)
+
+            else:
+                proxy.mark_good()
+
 
     def process_response(self, request, response, spider):
-        return self._handle_result(request, spider) or response
 
-    def _handle_result(self, request, spider):
-        proxy = self.proxies.get_proxy(request.meta.get("proxy", None))
+        proxy = request.meta.get("_rotating_proxy", None)
 
-        if not proxy or not request.meta.get("_rotating_proxy"):
-            return
+        # Only handle requests that were made with rotating proxy middleware
+        if proxy is not None:
 
-        self.crawler.stats.set_value(
-            "proxies/unchecked",
-            len(self.proxies.unchecked) - len(self.proxies.reanimated),
-        )
-        self.crawler.stats.set_value("proxies/reanimated", len(self.proxies.reanimated))
+            ban = spider.response_is_ban(request, response)
+
+            if ban:
+                self.stats.inc_value(f"bans/status/{response.status}")
+                if not response.body:
+                    self.stats.inc_value("bans/empty")
+
+                return self._handle_ban(request, proxy) or response
+
+            else:
+                proxy.mark_good()
+
+        return response
+
+    def _handle_ban(self, request, spider):
+
+        proxy = request.meta["_rotating_proxy"]
+        assert proxy
+        proxy.mark_dead()
+
+        # On _every_ result?
+        # Maybe just call this every now and then?
+        # Why isn't this in the log_stats looping function?
+        for status, count in self.proxies.get_status_counts():
+            self.crawler.stats.set_value(
+                f"proxies/{status}", count
+            )
+
         self.crawler.stats.set_value(
             "proxies/mean_backoff", self.proxies.mean_backoff_time
         )
-        ban = request.meta.get("_ban", None)
 
-        if ban is True:
-            self.proxies.mark_dead(proxy)
-            self.crawler.stats.set_value("proxies/dead", len(self.proxies.dead))
-            return self._retry(request, spider)
-        elif ban is False:
-            self.proxies.mark_good(proxy)
-            self.crawler.stats.set_value("proxies/good", len(self.proxies.good))
+        return self._retry(request, spider)
 
     def _retry(self, request, spider):
         retries = request.meta.get("proxy_retry_times", 0) + 1
-        max_proxies_to_try = request.meta.get(
-            "max_proxies_to_try", self.max_proxies_to_try
+        max_proxy_retries = request.meta.get(
+            "max_proxy_retries", self.max_proxy_retries
         )
 
+        # Because the retry is processed by this middleware and not the
+        # retry middleware, we need to manually adjust the priority
+        priority_adjust = request.meta.get('priority_adjust', self.priority_adjust)
+
         if retries <= max_proxies_to_try:
+            # TODO log "reason" like RetryMiddleware
             logger.debug(
                 "Retrying %(request)s with another proxy "
                 "(failed %(retries)d times, "
@@ -213,6 +229,8 @@ class RotatingProxyMiddleware:
             )
             retryreq = request.copy()
             retryreq.meta["proxy_retry_times"] = retries
+            retryreq.meta["dont_cache"] = True
+            retryreq.priority = request.priority + priority_adjust
             retryreq.dont_filter = True
             return retryreq
         else:
@@ -225,111 +243,3 @@ class RotatingProxyMiddleware:
 
     def log_stats(self):
         logger.info(str(self.proxies))
-
-    @classmethod
-    def cleanup_proxy_list(cls, proxy_list):
-        proxy_list = map(str.rstrip, proxy_list)
-        proxy_list = map(add_http_if_no_scheme, proxy_list)
-
-        # Remove dupes
-        proxy_list = set(proxy_list)
-
-        # Buit we want it to be a list for some reason
-        proxy_list = list(proxy_list)
-
-        return proxy_list
-
-
-class BanDetectionMiddleware:
-    """
-    Downloader middleware for detecting bans. It adds
-    '_ban': True to request.meta if the response was a ban.
-
-    To enable it, add it to DOWNLOADER_MIDDLEWARES option::
-
-        DOWNLOADER_MIDDLEWARES = {
-            # ...
-            'rotating_proxies.middlewares.BanDetectionMiddleware': 620,
-            # ...
-        }
-
-    By default, client is considered banned if a request failed, and alive
-    if a response was received. You can override ban detection method by
-    passing a path to a custom BanDectionPolicy in
-    ``ROTATING_PROXY_BAN_POLICY``, e.g.::
-
-    ROTATING_PROXY_BAN_POLICY = 'myproject.policy.MyBanPolicy'
-
-    The policy must be a class with ``response_is_ban``
-    and ``exception_is_ban`` methods. These methods can return True
-    (ban detected), False (not a ban) or None (unknown). It can be convenient
-    to subclass and modify default BanDetectionPolicy::
-
-        # myproject/policy.py
-        from rotating_proxies.policy import BanDetectionPolicy
-
-        class MyPolicy(BanDetectionPolicy):
-            def response_is_ban(self, request, response):
-                # use default rules, but also consider HTTP 200 responses
-                # a ban if there is 'captcha' word in response body.
-                ban = super(MyPolicy, self).response_is_ban(request, response)
-                ban = ban or b'captcha' in response.body
-                return ban
-
-            def exception_is_ban(self, request, exception):
-                # override method completely: don't take exceptions in account
-                return None
-
-    Instead of creating a policy you can also implement ``response_is_ban``
-    and ``exception_is_ban`` methods as spider methods, for example::
-
-        class MySpider(scrapy.Spider):
-            # ...
-
-            def response_is_ban(self, request, response):
-                return b'banned' in response.body
-
-            def exception_is_ban(self, request, exception):
-                return None
-
-    """
-
-    def __init__(self, stats, policy):
-        self.stats = stats
-        self.policy = policy
-
-    @classmethod
-    def from_crawler(cls, crawler):
-        return cls(crawler.stats, cls._load_policy(crawler))
-
-    @classmethod
-    def _load_policy(cls, crawler):
-        policy_path = crawler.settings.get(
-            "ROTATING_PROXY_BAN_POLICY", "rotating_proxies.policy.BanDetectionPolicy"
-        )
-        policy_cls = load_object(policy_path)
-        if hasattr(policy_cls, "from_crawler"):
-            return policy_cls.from_crawler(crawler)
-        else:
-            return policy_cls()
-
-    def process_response(self, request, response, spider):
-        is_ban = getattr(spider, "response_is_ban", self.policy.response_is_ban)
-        ban = is_ban(request, response)
-        request.meta["_ban"] = ban
-        if ban:
-            self.stats.inc_value(f"bans/status/{response.status}")
-            if not response.body:
-                self.stats.inc_value("bans/empty")
-        return response
-
-    def process_exception(self, request, exception, spider):
-        is_ban = getattr(spider, "exception_is_ban", self.policy.exception_is_ban)
-        ban = is_ban(request, exception)
-
-        if ban:
-            exception_class = exception.__class__
-            self.stats.inc_value(
-                f"bans/error/{exception_class.__module__}.{exception_class.__name__}"
-            )
-        request.meta["_ban"] = ban

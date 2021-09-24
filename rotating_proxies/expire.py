@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
-from __future__ import division
-import time
-import random
+import collections
 import logging
 import math
+import random
+import time
+import typing
+from statistics import fmean
+from urllib.parse import urlparse
+import enum
 
 import attr
+from scrapy.utils.url import add_http_if_no_scheme
 
-from .utils import extract_proxy_hostport
+from .backoff import ExponentialBackoff, ExponentialBackoffWithJitter
+
 
 logger = logging.getLogger(__name__)
 
 
-class Proxies:
+class ProxyManager:
     """
     Expiring proxies container.
 
@@ -33,134 +39,189 @@ class Proxies:
     unsuccessful attempt to use a proxy.
     """
 
-    def __init__(self, proxy_list, backoff=None):
-        self.proxies = {url: ProxyState() for url in proxy_list}
-        self.proxies_by_hostport = {
-            extract_proxy_hostport(proxy): proxy for proxy in self.proxies
-        }
-        self.unchecked = set(self.proxies.keys())
-        self.good = set()
-        self.dead = set()
+    def __init__(self, proxy_list):
 
-        if backoff is None:
-            backoff = exp_backoff_full_jitter
-        self.backoff = backoff
+        proxy_list = map(str.rstrip, proxy_list)
+        proxy_list = map(add_http_if_no_scheme, proxy_list)
 
-    def get_random(self):
+        # Remove dupes
+        proxy_list = set(proxy_list)
+
+        # TODO Restore actual custom backoff function# TODO Re-enable passing backoff
+        self.proxies = list(map(Proxy.from_string, proxy_list))
+
+    def get_random(self) -> typing.Optional['Proxy']:
         """Return a random available proxy (either good or unchecked)"""
-        available = list(self.unchecked | self.good)
+        available = [
+            proxy for proxy in self.proxies if proxy.status != ProxyStatus.DEAD
+        ]
+
         if not available:
             return None
-        return random.choice(available)
 
-    def get_proxy(self, proxy_address):
-        """
-        Return complete proxy name associated with a hostport of a given
-        ``proxy_address``. If ``proxy_address`` is unkonwn or empty,
-        return None.
-        """
-        if not proxy_address:
-            return None
-        hostport = extract_proxy_hostport(proxy_address)
-        return self.proxies_by_hostport.get(hostport, None)
+        return random.choices(available, weights=[
+            proxy.weight for proxy in available
+        ])[0]
 
-    def mark_dead(self, proxy, _time=None):
-        """Mark a proxy as dead"""
-        if proxy not in self.proxies:
-            logger.warn(f"Proxy <{proxy}> was not found in proxies list")
-            return
-
-        if proxy in self.good:
-            logger.debug(f"GOOD proxy became DEAD: <{proxy}>")
-        else:
-            logger.debug(f"Proxy <{proxy}> is DEAD")
-
-        self.unchecked.discard(proxy)
-        self.good.discard(proxy)
-        self.dead.add(proxy)
-
-        now = _time or time.time()
-        state = self.proxies[proxy]
-        state.backoff_time = self.backoff(state.failed_attempts)
-        state.next_check = now + state.backoff_time
-        state.failed_attempts += 1
-
-    def mark_good(self, proxy):
-        """Mark a proxy as good"""
-        if proxy not in self.proxies:
-            logger.warn(f"Proxy <{proxy}> was not found in proxies list")
-            return
-
-        if proxy not in self.good:
-            logger.debug(f"Proxy <{proxy}> is GOOD")
-
-        self.unchecked.discard(proxy)
-        self.dead.discard(proxy)
-        self.good.add(proxy)
-        self.proxies[proxy].failed_attempts = 0
-
-    def reanimate(self, _time=None):
+    def reanimate(self, slots):
         """Move dead proxies to unchecked if a backoff timeout passes"""
-        n_reanimated = 0
-        now = _time or time.time()
-        for proxy in list(self.dead):
-            state = self.proxies[proxy]
-            assert state.next_check is not None
-            if state.next_check <= now:
-                self.dead.remove(proxy)
-                self.unchecked.add(proxy)
-                n_reanimated += 1
-        return n_reanimated
+        number_reanimated = 0
+
+
+        # Why
+        delays = [
+            (slot.delay if slot else None) for slot in (
+                slots.get(proxy.slot_key, None) for proxy in self.proxies
+            )
+        ]
+
+        try:
+            average_delay = fmean(
+                delay for delay in delays if delay is not None
+            )
+        except ValueError:
+            average_weight = 1.0
+
+
+        # For logging/comparing against non-weighted random choice
+        # try:
+        #     average_good_delay = fmean(
+        #         (average_delay if delay is None else delay)
+        #         for proxy, delay in zip(self.proxies, delays) if proxy.status == ProxyStatus.GOOD
+        #     )
+        #
+        #     print(f"average_good_delay: {average_good_delay}")
+        # except ValueError:
+        #     pass
+
+
+        for proxy, delay in zip(self.proxies, delays):
+
+            # Inverse delay is approximately "requests per second"
+            proxy.weight = 1 / (average_delay if delay is None else delay)
+
+            if proxy.reanimate():
+                number_reanimated += 1
+
+        return number_reanimated
 
     def reset(self):
         """Mark all dead proxies as unchecked"""
-        for proxy in list(self.dead):
-            self.dead.remove(proxy)
-            self.unchecked.add(proxy)
+        for proxy in self.proxies:
+            proxy.reset()
 
     @property
-    def mean_backoff_time(self):
-        if not self.dead:
+    def mean_backoff_amount(self) -> float:
+        try:
+            return fmean(
+                proxy.backoff.amount for proxy in self.proxies if proxy.status == ProxyStatus.DEAD
+            )
+        except ValueError:
             return 0.0
-        total_backoff = sum(self.proxies[p].backoff_time for p in self.dead)
-        return float(total_backoff) / len(self.dead)
 
-    @property
-    def reanimated(self):
-        return [p for p in self.unchecked if self.proxies[p].failed_attempts]
+    def get_status_counts(self):
+        return collections.Counter(proxy.status for proxy in self.proxies)
 
     def __str__(self):
-        n_reanimated = len(self.reanimated)
+        status_counter = self.get_status_counts()
 
         return (
             "Proxies("
-            f"good: {len(self.good)}, "
-            f"dead: {len(self.dead)}, "
-            f"unchecked: {len(self.unchecked) - n_reanimated}, "
-            f"reanimated: {n_reanimated}, "
-            f"mean backoff time: {int(self.mean_backoff_time)}s"
+            f"good: {status_counter[ProxyStatus.GOOD]}, "
+            f"dead: {status_counter[ProxyStatus.DEAD]}, "
+            f"unchecked: {status_counter[ProxyStatus.UNCHECKED]}, "
+            f"reanimated: {status_counter[ProxyStatus.REANIMATED]}, "
+            f"mean backoff amount: {int(self.mean_backoff_amount)}s"
             ")"
         )
 
 
-@attr.s
-class ProxyState:
-    slot_key: str = attr.ib()
-    failed_attempts: int = attr.ib(default=0)
-    next_check: typing.Optional[time.time] = attr.ib(default=None)
-    backoff_time: typing.Optiona[float] = attr.ib(default=None)  # for debugging
+class ProxyStatus(enum.Enum):
+    UNCHECKED = 'unchecked'
+    GOOD = 'good'
+    DEAD = 'dead'
+    REANIMATED = 'reanimated'
 
 
-def exp_backoff(attempt, cap=3_600, base=300) -> float:
-    """Exponential backoff time"""
-    # this is a numerically stable version of
-    # min(cap, base * 2 ** attempt)
-    max_attempts = math.log(cap / base, 2)
-    if attempt <= max_attempts:
-        return base * 2 ** attempt
-    return cap
+# TODO Maybe try to keep track of how often it's banned as a percentage of request
+# Or also "uptime"
+@attr.s(hash=False, eq=False)
+class Proxy:
+    url: str = attr.ib(on_setattr=attr.setters.frozen)
+    slot_key: str = attr.ib(on_setattr=attr.setters.frozen)
+    status: ProxyStatus = attr.ib(default=ProxyStatus.UNCHECKED)
+
+    # For retrying
+    backoff: ExponentialBackoff = attr.ib(factory=ExponentialBackoffWithJitter)
+
+    # For random weighted selection
+    weight: float = attr.ib(default=1.0)
+
+    @classmethod
+    def from_string(cls, proxy: str) -> 'ProxyState':
+        """
+        Return downloader slot for a proxy.
+
+        By default it doesn't take port in account, i.e. all proxies with
+        the same hostname / ip address share the same slot, unless
+        the hostname is "localhost" in which case it does
+        """
+        # FIXME: an option to use website address as a part of slot as well?
+        parsed = urlparse(proxy)
+
+        if parsed.hostname == "localhost":
+            slot_key = f"{parsed.hostname}:{parsed.port}"
+        else:
+            slot_key = parsed.hostname
+
+        # TODO Consider making proxy canonical
+        # Case-sensitivity and other quirks might cause us pain
+        return cls(
+            url=proxy,
+            slot_key=slot_key
+        )
+
+    def __eq__(self, other):
+        return hasattr(other, 'url') and self.url == other.url
+
+    def __hash__(self):
+        return hash(self.url)
+
+    def reset(self):
+        """Mark all self as unchecked"""
+        self.status = ProxyStatus.UNCHECKED
+        self.backoff.reset()
+
+    def mark_dead(self):
+        """Mark self as dead"""
+        # if proxy not in self.proxies:
+        #     logger.warn(f"Proxy <{proxy}> was not found in proxies list")
+        #     return
+
+        if self.status != ProxyStatus.DEAD:
+            logger.debug(f"{self.status} proxy became DEAD: <{self}>")
+            self.status = ProxyStatus.DEAD
+            self.backoff()
+        else:
+            logger.debug(f"Proxy <{self}> is DEAD")
 
 
-def exp_backoff_full_jitter(*args, **kwargs) -> float:
-    """Exponential backoff time with Full Jitter"""
-    return random.uniform(0, exp_backoff(*args, **kwargs))
+    def mark_good(self):
+        """Mark a self as good"""
+
+        if self.status != ProxyStatus.GOOD:
+            logger.debug(f"Proxy <{self}> is GOOD")
+
+            self.status = ProxyStatus.GOOD
+            self.backoff.reset()
+
+    def reanimate(self) -> bool:
+        """Reanimate self as reanimated
+
+        Return True if reanimated"""
+
+        if self.status == ProxyStatus.DEAD and self.backoff.time <= time.monotonic():
+            self.status = ProxyStatus.REANIMATED
+            return True
+        else:
+            return False

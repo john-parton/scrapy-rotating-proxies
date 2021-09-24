@@ -1,9 +1,9 @@
 [project]
-name = "scrapy-rotating-proxies"
+name = "rotating_proxies"
 
 [build-system]
 requires = [
-  "setuptools",
+  "setuptools >= 45",
   "wheel",
   "setuptools_scm[toml]>=6.0"
 ]

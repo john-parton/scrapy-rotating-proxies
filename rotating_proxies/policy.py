@@ -3,7 +3,10 @@ from scrapy.exceptions import IgnoreRequest
 
 
 class BanDetectionPolicy:
-    """Default ban detection rules."""
+    """
+    Default ban detection rules.
+    Can be used as a mixin on a crawler
+    """
 
     NOT_BAN_STATUSES = {200, 301, 302}
     NOT_BAN_EXCEPTIONS = (IgnoreRequest,)
