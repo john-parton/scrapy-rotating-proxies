@@ -1,5 +1,6 @@
 import logging
 import math
+import random
 import typing
 import time
 
@@ -20,10 +21,12 @@ class ExponentialBackoff:
     def __attrs_post_init__(self):
         # this is a numerically stable version of
         # min(cap, base * 2 ** attempt)
+        # Should be ceil? floor?
         self._max_attempts = math.log(self.max_amount / self.base, 2)
 
     def _get_amount(self):
-        return base * 2 ** attempt if self.attempts > self._max_attempts else self.max_amount
+        # Should be <= or < ?
+        return self.base * 2 ** self.attempts if self.attempts < self._max_attempts else self.max_amount
 
     def __call__(self):
         """Exponential backoff time"""
@@ -37,8 +40,8 @@ class ExponentialBackoff:
 
 
 class ExponentialBackoffWithJitter(ExponentialBackoff):
-    def _get_value(self):
+    def _get_amount(self):
         return random.uniform(
             0,
-            super()._get_value()
+            super()._get_amount()
         )
