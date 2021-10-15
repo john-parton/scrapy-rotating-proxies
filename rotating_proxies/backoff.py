@@ -13,7 +13,19 @@ logger = logging.getLogger(__name__)
 @attr.s
 class ExponentialBackoff:
     attempts: int = attr.ib(default=0)
-    base: int = attr.ib(default=30, on_setattr=attr.setters.frozen)
+    # The "base" here should probably have some relationship to the number
+    # of proxies we are trying to test
+    # Also probably ratio of "actually good" versus "actually bad" proxies provided
+    # as well as the expected response time for a given proxy
+    # If we're reanimating proxies faster than we can check them
+    # then the backing off doesn't really do anything
+    # Jitter is also a factor obviously
+    # 5 minutes
+    # 10 minutes
+    # 20 minutes
+    # 40 minutes
+    # ...
+    base: int = attr.ib(default=600, on_setattr=attr.setters.frozen)
     max_amount: int = attr.ib(default=24 * 60 * 60, on_setattr=attr.setters.frozen)
     amount: float = attr.ib(default=0.0)
     time: typing.Optional[float] = attr.ib(default=None)

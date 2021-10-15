@@ -80,8 +80,13 @@ class ProxyManager:
                 delay for delay in delays if delay is not None
             )
         except ValueError:
-            average_weight = 1.0
+            average_delay = 0.100
 
+        min_delay = min(
+            (delay for delay in delays if delay is not None), default=0.100
+        )
+
+        # TODO Log min dealay / average delay
 
         # For logging/comparing against non-weighted random choice
         # try:
@@ -98,7 +103,17 @@ class ProxyManager:
         for proxy, delay in zip(self.proxies, delays):
 
             # Inverse delay is approximately "requests per second"
-            proxy.weight = 1 / (average_delay if delay is None else delay)
+            if delay is None:
+                if proxy.status == ProxyStatus.UNCHECKED:
+                    # Unchecked proxies are twice as likely to be queued up as the fastest
+                    # checked proxy
+                    # could do 1 / min_delay if we wanted to balance checking proxies with fast proxies
+                    proxy.weight = 2 / min_delay
+                # Re-animated or good missing weight somehow?
+                else:
+                    proxy.weight = 1 / average_delay
+            else:
+                proxy.weight = 1 / delay
 
             if proxy.reanimate():
                 number_reanimated += 1
