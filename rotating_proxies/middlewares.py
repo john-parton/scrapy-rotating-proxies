@@ -182,7 +182,7 @@ class RotatingProxyMiddleware:
 
             else:
                 if 'cached' not in response.flags:
-                    proxy.mark_good()
+                    self.proxies.mark_good(proxy)
 
         return response
 
@@ -190,7 +190,8 @@ class RotatingProxyMiddleware:
 
         proxy = request.meta["_rotating_proxy"]
         assert proxy
-        proxy.mark_dead()
+
+        self.proxies.mark_dead(proxy)
 
         # On _every_ result?
         # Maybe just call this every now and then?

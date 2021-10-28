@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import collections
 import logging
+import functools
+import itertools as it
 import math
 import random
 import time
@@ -50,18 +52,41 @@ class ProxyManager:
         # TODO Restore actual custom backoff function# TODO Re-enable passing backoff
         self.proxies = list(map(Proxy.from_string, proxy_list))
 
-    def get_random(self) -> typing.Optional['Proxy']:
-        """Return a random available proxy (either good or unchecked)"""
-        available = [
+    def _clear_cache(self):
+        try:
+            del self._cached
+        except AttributeError:
+            pass
+
+    @functools.cached_property
+    def _cached(self):
+        proxies = [
             proxy for proxy in self.proxies if proxy.status != ProxyStatus.DEAD
         ]
+
+        weights = list(
+            it.accumulate(
+                proxy.weight for proxy in proxies
+            )
+        )
+
+        return proxies, weights
+
+    def get_random(self) -> typing.Optional['Proxy']:
+        """Return a random available proxy (either good or unchecked)"""
+        # This list comprehension and random choices
+        # call is surprisingly expensive
+        # It actually causes us to be CPU-bound in the case where
+        # we're pulling everything from cache
+        available, weights = self._cached
 
         if not available:
             return None
 
-        return random.choices(available, weights=[
-            proxy.weight for proxy in available
-        ])[0]
+        return random.choices(
+            available,
+            cum_weights=weights
+        )[0]
 
     def reanimate(self, slots):
         """Move dead proxies to unchecked if a backoff timeout passes"""
@@ -118,12 +143,28 @@ class ProxyManager:
             if proxy.reanimate():
                 number_reanimated += 1
 
+        self._clear_cache()
+
         return number_reanimated
 
     def reset(self):
         """Mark all dead proxies as unchecked"""
         for proxy in self.proxies:
             proxy.reset()
+
+        self._clear_cache()
+
+    def mark_good(self, proxy):
+        invalidate = proxy.mark_good()
+
+        if invalidate:
+            self._clear_cache()
+
+    def mark_dead(self, proxy):
+        invalidate = proxy.mark_dead()
+
+        if invalidate:
+            self._clear_cache()
 
     @property
     def mean_backoff_amount(self) -> float:
@@ -203,11 +244,12 @@ class Proxy:
         return hash(self.url)
 
     def reset(self):
-        """Mark all self as unchecked"""
+        """Mark self as unchecked"""
         self.status = ProxyStatus.UNCHECKED
         self.backoff.reset()
 
-    def mark_dead(self):
+    # Return True if cache needs to be invalidated
+    def mark_dead(self) -> bool:
         """Mark self as dead"""
         # if proxy not in self.proxies:
         #     logger.warn(f"Proxy <{proxy}> was not found in proxies list")
@@ -217,11 +259,13 @@ class Proxy:
             logger.debug(f"{self.status} proxy became DEAD: <{self}>")
             self.status = ProxyStatus.DEAD
             self.backoff()
+            return True
         else:
             logger.debug(f"Proxy <{self}> is DEAD")
+            return False
 
-
-    def mark_good(self):
+    # Return True if cache needs to be invalidated
+    def mark_good(self) -> bool:
         """Mark a self as good"""
 
         if self.status != ProxyStatus.GOOD:
@@ -229,6 +273,9 @@ class Proxy:
 
             self.status = ProxyStatus.GOOD
             self.backoff.reset()
+            return True
+        else:
+            return False
 
     def reanimate(self) -> bool:
         """Reanimate self as reanimated
