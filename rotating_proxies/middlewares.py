@@ -163,7 +163,6 @@ class RotatingProxyMiddleware:
 
                 return self._handle_ban(request, proxy)
 
-
     def process_response(self, request, response, spider):
 
         proxy = request.meta.get("_rotating_proxy", None)
@@ -181,7 +180,7 @@ class RotatingProxyMiddleware:
                 return self._handle_ban(request, proxy) or response
 
             else:
-                if 'cached' not in response.flags:
+                if "cached" not in response.flags:
                     self.proxies.mark_good(proxy)
 
         return response
@@ -197,9 +196,7 @@ class RotatingProxyMiddleware:
         # Maybe just call this every now and then?
         # Why isn't this in the log_stats looping function?
         for status, count in self.proxies.get_status_counts().items():
-            self.crawler.stats.set_value(
-                f"proxies/{status}", count
-            )
+            self.crawler.stats.set_value(f"proxies/{status}", count)
 
         self.crawler.stats.set_value(
             "proxies/mean_backoff", self.proxies.mean_backoff_amount
@@ -212,7 +209,6 @@ class RotatingProxyMiddleware:
         max_proxy_retries = request.meta.get(
             "max_proxy_retries", self.max_proxy_retries
         )
-
 
         if retries <= max_proxy_retries:
             # TODO log "reason" like RetryMiddleware
@@ -239,7 +235,9 @@ class RotatingProxyMiddleware:
             # retryreq.meta["dont_cache"] = True
             # Because the retry is processed by this middleware and not the
             # retry middleware, we need to manually adjust the priority
-            retryreq.priority = request.priority + request.meta.get('priority_adjust', self.priority_adjust)
+            retryreq.priority = request.priority + request.meta.get(
+                "priority_adjust", self.priority_adjust
+            )
             retryreq.dont_filter = True
             return retryreq
         else:
@@ -255,7 +253,6 @@ class RotatingProxyMiddleware:
         logger.info(str(self.proxies))
 
 
-
 class RotatingProxyHttpCacheMiddleware(HttpCacheMiddleware):
     # This is a replacement Middleware for the HttpCacheMiddleware which
     # lets our retry'd requests go through again
@@ -264,7 +261,7 @@ class RotatingProxyHttpCacheMiddleware(HttpCacheMiddleware):
 
     # No type annotations
     def process_request(self, request, spider):
-        if request.meta.get('proxy_retry_times', 0):
+        if request.meta.get("proxy_retry_times", 0):
             return
 
         return super().process_request(request, spider)

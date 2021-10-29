@@ -38,7 +38,11 @@ class ExponentialBackoff:
 
     def _get_amount(self):
         # Should be <= or < ?
-        return self.base * 2 ** self.attempts if self.attempts < self._max_attempts else self.max_amount
+        return (
+            self.base * 2 ** self.attempts
+            if self.attempts < self._max_attempts
+            else self.max_amount
+        )
 
     def __call__(self):
         """Exponential backoff time"""
@@ -53,7 +57,4 @@ class ExponentialBackoff:
 
 class ExponentialBackoffWithJitter(ExponentialBackoff):
     def _get_amount(self):
-        return random.uniform(
-            0,
-            super()._get_amount()
-        )
+        return random.uniform(0, super()._get_amount())

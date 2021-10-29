@@ -60,19 +60,13 @@ class ProxyManager:
 
     @functools.cached_property
     def _cached(self):
-        proxies = [
-            proxy for proxy in self.proxies if proxy.status != ProxyStatus.DEAD
-        ]
+        proxies = [proxy for proxy in self.proxies if proxy.status != ProxyStatus.DEAD]
 
-        weights = list(
-            it.accumulate(
-                proxy.weight for proxy in proxies
-            )
-        )
+        weights = list(it.accumulate(proxy.weight for proxy in proxies))
 
         return proxies, weights
 
-    def get_random(self) -> typing.Optional['Proxy']:
+    def get_random(self) -> typing.Optional["Proxy"]:
         """Return a random available proxy (either good or unchecked)"""
         # This list comprehension and random choices
         # call is surprisingly expensive
@@ -83,33 +77,24 @@ class ProxyManager:
         if not available:
             return None
 
-        return random.choices(
-            available,
-            cum_weights=weights
-        )[0]
+        return random.choices(available, cum_weights=weights)[0]
 
     def reanimate(self, slots):
         """Move dead proxies to unchecked if a backoff timeout passes"""
         number_reanimated = 0
 
-
         # Why
         delays = [
-            (slot.delay if slot else None) for slot in (
-                slots.get(proxy.slot_key, None) for proxy in self.proxies
-            )
+            (slot.delay if slot else None)
+            for slot in (slots.get(proxy.slot_key, None) for proxy in self.proxies)
         ]
 
         try:
-            average_delay = fmean(
-                delay for delay in delays if delay is not None
-            )
+            average_delay = fmean(delay for delay in delays if delay is not None)
         except ValueError:
             average_delay = 0.100
 
-        min_delay = min(
-            (delay for delay in delays if delay is not None), default=0.100
-        )
+        min_delay = min((delay for delay in delays if delay is not None), default=0.100)
 
         # TODO Log min dealay / average delay
 
@@ -124,10 +109,8 @@ class ProxyManager:
         # except ValueError:
         #     pass
 
-
         print(f"average_delay: {average_delay}")
         print(f"min_delay: {min_delay}")
-
 
         for proxy, delay in zip(self.proxies, delays):
 
@@ -138,7 +121,9 @@ class ProxyManager:
                     # checked proxy
                     # could do 1 / min_delay if we wanted to balance checking proxies with fast proxies
                     proxy.weight = 10 / min_delay
-                    print(f"{proxy.url!r} is unchecked, setting weight to {proxy.weight}")
+                    print(
+                        f"{proxy.url!r} is unchecked, setting weight to {proxy.weight}"
+                    )
                 # Re-animated or good missing weight somehow?
                 else:
                     proxy.weight = 1 / average_delay
@@ -175,7 +160,9 @@ class ProxyManager:
     def mean_backoff_amount(self) -> float:
         try:
             return fmean(
-                proxy.backoff.amount for proxy in self.proxies if proxy.status == ProxyStatus.DEAD
+                proxy.backoff.amount
+                for proxy in self.proxies
+                if proxy.status == ProxyStatus.DEAD
             )
         except ValueError:
             return 0.0
@@ -198,10 +185,10 @@ class ProxyManager:
 
 
 class ProxyStatus(enum.Enum):
-    UNCHECKED = 'unchecked'
-    GOOD = 'good'
-    DEAD = 'dead'
-    REANIMATED = 'reanimated'
+    UNCHECKED = "unchecked"
+    GOOD = "good"
+    DEAD = "dead"
+    REANIMATED = "reanimated"
 
 
 # TODO Maybe try to keep track of how often it's banned as a percentage of request
@@ -219,7 +206,7 @@ class Proxy:
     weight: float = attr.ib(default=1.0)
 
     @classmethod
-    def from_string(cls, proxy: str) -> 'ProxyState':
+    def from_string(cls, proxy: str) -> "ProxyState":
         """
         Return downloader slot for a proxy.
 
@@ -237,13 +224,10 @@ class Proxy:
 
         # TODO Consider making proxy canonical
         # Case-sensitivity and other quirks might cause us pain
-        return cls(
-            url=proxy,
-            slot_key=slot_key
-        )
+        return cls(url=proxy, slot_key=slot_key)
 
     def __eq__(self, other):
-        return hasattr(other, 'url') and self.url == other.url
+        return hasattr(other, "url") and self.url == other.url
 
     def __hash__(self):
         return hash(self.url)
