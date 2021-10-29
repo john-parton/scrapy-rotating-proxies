@@ -125,15 +125,20 @@ class ProxyManager:
         #     pass
 
 
+        print(f"average_delay: {average_delay}")
+        print(f"min_delay: {min_delay}")
+
+
         for proxy, delay in zip(self.proxies, delays):
 
             # Inverse delay is approximately "requests per second"
             if delay is None:
                 if proxy.status == ProxyStatus.UNCHECKED:
-                    # Unchecked proxies are twice as likely to be queued up as the fastest
+                    # Unchecked proxies are ten times as likely to be queued up as the fastest
                     # checked proxy
                     # could do 1 / min_delay if we wanted to balance checking proxies with fast proxies
-                    proxy.weight = 2 / min_delay
+                    proxy.weight = 10 / min_delay
+                    print(f"{proxy.url!r} is unchecked, setting weight to {proxy.weight}")
                 # Re-animated or good missing weight somehow?
                 else:
                     proxy.weight = 1 / average_delay
