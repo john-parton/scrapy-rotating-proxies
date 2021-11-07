@@ -84,17 +84,18 @@ class ProxyManager:
         number_reanimated = 0
 
         # Why
+        keys = slots.keys() & set(proxy.slot_key for proxy in self.proxies)
+
         delays = [
-            (slot.delay if slot else None)
-            for slot in (slots.get(proxy.slot_key, None) for proxy in self.proxies)
+            slots[key].delay for key in keys
         ]
 
-        try:
-            average_delay = fmean(delay for delay in delays if delay is not None)
-        except ValueError:
-            average_delay = 0.100
-
-        min_delay = min((delay for delay in delays if delay is not None), default=0.100)
+        if delays:
+            average_delay = fmean(delays)
+            min_delay = min(delays)
+        else:
+            average_delay = 1
+            min_delay = 1
 
         # TODO Log min dealay / average delay
 
@@ -109,31 +110,37 @@ class ProxyManager:
         # except ValueError:
         #     pass
 
-        print(f"average_delay: {average_delay}")
-        print(f"min_delay: {min_delay}")
+        # print(f"average_delay: {average_delay}")
+        # print(f"min_delay: {min_delay}")
 
-        for proxy, delay in zip(self.proxies, delays):
+        do_clear = False
 
-            # Inverse delay is approximately "requests per second"
-            if delay is None:
+        for proxy in self.proxies:
+
+            if proxy.slot_key in slots:
+                delay = slots[proxy.slot_key].delay
+                proxy.weight = 1 / delay
+
+            else:
+
                 if proxy.status == ProxyStatus.UNCHECKED:
                     # Unchecked proxies are ten times as likely to be queued up as the fastest
                     # checked proxy
                     # could do 1 / min_delay if we wanted to balance checking proxies with fast proxies
                     proxy.weight = 10 / min_delay
-                    print(
-                        f"{proxy.url!r} is unchecked, setting weight to {proxy.weight}"
-                    )
+                    # print(
+                    #     f"{proxy.url!r} is unchecked, setting weight to {proxy.weight}"
+                    # )
                 # Re-animated or good missing weight somehow?
                 else:
                     proxy.weight = 1 / average_delay
-            else:
-                proxy.weight = 1 / delay
 
             if proxy.reanimate():
+                do_clear = True
                 number_reanimated += 1
 
-        self._clear_cache()
+        if do_clear:
+            self._clear_cache()
 
         return number_reanimated
 
