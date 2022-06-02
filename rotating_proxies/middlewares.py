@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 import logging
-from functools import partial
 
 
-from scrapy.http.request import Request
-from scrapy.http.response import Response
 from scrapy.downloadermiddlewares.retry import get_retry_request
 from scrapy.exceptions import CloseSpider, NotConfigured
 from scrapy import signals
-from scrapy.utils.misc import load_object
 from twisted.internet import task
 
-from .expire import ProxyManager, ProxyStatus
+from .expire import ProxyManager
 
 
 logger = logging.getLogger(__name__)

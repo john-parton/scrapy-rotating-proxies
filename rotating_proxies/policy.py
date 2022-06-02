@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import typing
-import warnings
 
 from scrapy.exceptions import IgnoreRequest
 
