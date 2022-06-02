@@ -5,7 +5,6 @@ import warnings
 from scrapy.exceptions import IgnoreRequest
 
 
-
 class BanDetectionMixin:
     """
     Default ban detection rules.
@@ -16,10 +15,14 @@ class BanDetectionMixin:
 
     BAN_DETECTION_EMPTY_200_OK: typing.ClassVar[bool] = False
     BAN_DETECTION_OK_STATUSES = {200, 301, 302}
-    BAN_DETECTION_OK_EXCEPTIONS = (IgnoreRequest, )
+    BAN_DETECTION_OK_EXCEPTIONS = (IgnoreRequest,)
 
     def response_is_ban(self, request, response):
-        if not self.BAN_DETECTION_EMPTY_200_OK and response.status == 200 and not response.body:
+        if (
+            not self.BAN_DETECTION_EMPTY_200_OK
+            and response.status == 200
+            and not response.body
+        ):
             return True
 
         return response.status not in self.BAN_DETECTION_OK_STATUSES

@@ -21,6 +21,8 @@ class RotatingProxyMiddleware:
     """
     Scrapy downloader middleware which choses a random proxy for each request.
 
+    This documentation is not correct at the moment.
+
     To enable it, add it and BanDetectionMiddleware
     to DOWNLOADER_MIDDLEWARES option::
 
@@ -179,7 +181,6 @@ class RotatingProxyMiddleware:
             logger=logger,
         )
 
-
     def process_response(self, request, response, spider):
 
         proxy = request.meta.get("_rotating_proxy", None)
@@ -198,10 +199,7 @@ class RotatingProxyMiddleware:
                     reason = "ban/empty"
 
                 return self._retry_ban(
-                    request,
-                    reason=reason,
-                    spider=spider,
-                    proxy=proxy
+                    request, reason=reason, spider=spider, proxy=proxy
                 )
 
             # Ban is already checked above and guarded here?
@@ -221,6 +219,4 @@ class RotatingProxyMiddleware:
 
         # Should this be in its own looping method?
         for status, count in self.proxies.get_status_counts().items():
-            self.crawler.stats.set_value(
-                f"proxies/{status}", count
-            )
+            self.crawler.stats.set_value(f"proxies/{status}", count)

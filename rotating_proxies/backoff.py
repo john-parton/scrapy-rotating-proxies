@@ -39,7 +39,7 @@ class ExponentialBackoff:
     def _get_amount(self):
         # Should be <= or < ?
         return (
-            self.base * 2 ** self.attempts
+            self.base * 2**self.attempts
             if self.attempts < self._max_attempts
             else self.max_amount
         )

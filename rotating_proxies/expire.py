@@ -86,9 +86,7 @@ class ProxyManager:
         # Why
         keys = slots.keys() & set(proxy.slot_key for proxy in self.proxies)
 
-        delays = [
-            slots[key].delay for key in keys
-        ]
+        delays = [slots[key].delay for key in keys]
 
         if delays:
             average_delay = fmean(delays)
