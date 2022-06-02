@@ -5,8 +5,7 @@ from functools import partial
 
 from scrapy.http.request import Request
 from scrapy.http.response import Response
-from scrapy.downloadmiddlewares.retry import get_retry_request
-from scrapy.downloadermiddlewares.httpcache import HttpCacheMiddleware
+from scrapy.downloadermiddlewares.retry import get_retry_request
 from scrapy.exceptions import CloseSpider, NotConfigured
 from scrapy import signals
 from scrapy.utils.misc import load_object
@@ -81,7 +80,7 @@ class RotatingProxyMiddleware:
         self.logstats_interval = s.getfloat("ROTATING_PROXY_LOGSTATS_INTERVAL", 30)
         self.reanimate_interval = 5  # Hard-coded
         self.stop_if_no_proxies = s.getbool("ROTATING_PROXY_CLOSE_SPIDER", False)
-        self.max_proxy_retries = s.getint("ROTATING_PROXY_PAGE_RETRY_TIMES", 5)
+        self.max_retry_times = s.getint("ROTATING_PROXY_PAGE_RETRY_TIMES", 5)
         self.crawler = crawler
         self.log_task = None
         self.reanimate_task = None
