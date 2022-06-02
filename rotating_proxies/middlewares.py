@@ -175,7 +175,8 @@ class RotatingProxyMiddleware:
             reason=reason,
             spider=spider,
             max_retry_times=max_retry_times,
-            priority_adjust=priority_adjust
+            priority_adjust=priority_adjust,
+            logger=logger,
         )
 
 
