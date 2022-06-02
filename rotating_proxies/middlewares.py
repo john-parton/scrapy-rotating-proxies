@@ -5,6 +5,7 @@ from functools import partial
 
 from scrapy.http.request import Request
 from scrapy.http.response import Response
+from scrapy.downloadmiddlewares.retry import get_retry_request
 from scrapy.downloadermiddlewares.httpcache import HttpCacheMiddleware
 from scrapy.exceptions import CloseSpider, NotConfigured
 from scrapy import signals
@@ -70,15 +71,8 @@ class RotatingProxyMiddleware:
 
     def __init__(self, crawler):
         s = crawler.settings
-        proxy_path = s.get("ROTATING_PROXY_LIST_PATH", None)
 
-        if proxy_path is not None:
-            with open(proxy_path, "rt", encoding="utf8") as f:
-                proxy_list = map(str.strip, f)
-                proxy_list = filter(None, proxy_list)
-                proxy_list = list(proxy_list)
-        else:
-            proxy_list = s.getlist("ROTATING_PROXY_LIST")
+        proxy_list = s.getlist("ROTATING_PROXY_LIST")
 
         if not proxy_list:
             raise NotConfigured()
@@ -156,113 +150,77 @@ class RotatingProxyMiddleware:
             ban = spider.exception_is_ban(request, exception)
 
             if ban:
-                exception_class = exception.__class__
-                self.crawler.stats.inc_value(
-                    f"bans/error/{exception_class.__module__}.{exception_class.__name__}"
+                # the get_retry_request helper method
+                # should turn the exception into a "pretty" string
+                return self._retry_ban(
+                    request,
+                    reason=exception,
+                    spider=spider,
+                    proxy=proxy,
                 )
 
-                return self._handle_ban(request, proxy)
+            # The exception here is usually "ignored request" ... I don't think
+            # that means our proxy is actually good
+            # So we shouldn't mark it as such here
+
+    def _retry_ban(self, request, *, proxy, reason, spider):
+        self.proxies.mark_dead(proxy)
+
+        # ??? Doesn't look at meta ???
+        # Not sure the best way to configure this
+        max_retry_times = self.max_retry_times
+        priority_adjust = self.priority_adjust
+
+        return get_retry_request(
+            request,
+            reason=reason,
+            spider=spider,
+            max_retry_times=max_retry_times,
+            priority_adjust=priority_adjust
+        )
+
 
     def process_response(self, request, response, spider):
 
         proxy = request.meta.get("_rotating_proxy", None)
 
         # Only handle requests that were made with rotating proxy middleware
+        # Almost completely copy/pasted from above
         if proxy is not None:
 
             ban = spider.response_is_ban(request, response)
 
             if ban:
-                self.crawler.stats.inc_value(f"bans/status/{response.status}")
-                if not response.body:
-                    self.crawler.stats.inc_value("bans/empty")
 
-                return self._handle_ban(request, proxy) or response
+                if response.body:
+                    reason = f"ban/status/{response.status}"
+                else:
+                    reason = "ban/empty"
 
-            else:
-                if 'cached' not in response.flags:
-                    self.proxies.mark_good(proxy)
+                return self._retry_ban(
+                    request,
+                    reason=reason,
+                    spider=spider,
+                    proxy=proxy
+                )
+
+            # Ban is already checked above and guarded here?
+            if not ban and "cached" not in response.flags:
+                self.proxies.mark_good(proxy)
 
         return response
 
-    def _handle_ban(self, request, spider):
+    def log_stats(self):
+        # TODO Make this better
+        logger.info(str(self.proxies))
 
-        proxy = request.meta["_rotating_proxy"]
-        assert proxy
-
-        self.proxies.mark_dead(proxy)
-
-        # On _every_ result?
-        # Maybe just call this every now and then?
-        # Why isn't this in the log_stats looping function?
-        for status, count in self.proxies.get_status_counts().items():
-            self.crawler.stats.set_value(
-                f"proxies/{status}", count
-            )
-
+        # Should this be in its own looping method?
         self.crawler.stats.set_value(
             "proxies/mean_backoff", self.proxies.mean_backoff_amount
         )
 
-        return self._retry(request, spider)
-
-    def _retry(self, request, spider):
-        retries = request.meta.get("proxy_retry_times", 0) + 1
-        max_proxy_retries = request.meta.get(
-            "max_proxy_retries", self.max_proxy_retries
-        )
-
-        if retries <= max_proxy_retries:
-            # TODO log "reason" like RetryMiddleware
-            logger.debug(
-                "Retrying %(request)s with another proxy "
-                "(failed %(retries)d times, "
-                "max retries: %(max_proxy_retries)d)",
-                {
-                    "request": request,
-                    "retries": retries,
-                    "max_proxy_retries": max_proxy_retries,
-                },
-                extra={"spider": spider},
+        # Should this be in its own looping method?
+        for status, count in self.proxies.get_status_counts().items():
+            self.crawler.stats.set_value(
+                f"proxies/{status}", count
             )
-
-            retryreq = request.copy()
-            retryreq.meta["proxy_retry_times"] = retries
-            # It's not _ideal_ to pass 'dont_cache' in the meta here
-            # That _will_ get the request to pass back through the HttpCache
-            # layer, however, when the response comes back, it won't cache
-            # that either
-            # The solution is to use a caching policy. Refer to RotatingProxyHttpCacheMiddleware
-            # below
-            # retryreq.meta["dont_cache"] = True
-            # Because the retry is processed by this middleware and not the
-            # retry middleware, we need to manually adjust the priority
-            retryreq.priority = request.priority + request.meta.get('priority_adjust', self.priority_adjust)
-            retryreq.dont_filter = True
-            return retryreq
-        else:
-            logger.debug(
-                "Gave up retrying %(request)s (failed %(retries)d "
-                "times with different proxies)",
-                {"request": request, "retries": retries},
-                extra={"spider": spider},
-            )
-
-    def log_stats(self):
-        # Make this better
-        logger.info(str(self.proxies))
-
-
-
-class RotatingProxyHttpCacheMiddleware(HttpCacheMiddleware):
-    # This is a replacement Middleware for the HttpCacheMiddleware which
-    # lets our retry'd requests go through again
-    # BUT the responses returned get to go into the cache
-    # So if we crawl again, the first request will use the cache
-
-    # No type annotations
-    def process_request(self, request, spider):
-        if request.meta.get('proxy_retry_times', 0):
-            return
-
-        return super().process_request(request, spider)
