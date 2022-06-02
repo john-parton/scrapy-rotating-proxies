@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from scrapy.http import Response, Request
-from rotating_proxies.policy import BanDetectionPolicy
+from rotating_proxies.policy import BanDetectionMixin
 import pytest
 
 
@@ -40,4 +40,3 @@ def test_default_ban_policy_empty_body(policy):
 
 def test_default_ban_policy_exception(policy):
     assert policy.exception_is_ban(request, ValueError()) is True
-
